@@ -18,8 +18,8 @@ from cuml.metrics import silhouette_score  # GPU-based Silhouette Score
 import matplotlib.pyplot as plt
 
 def graph_to_adjacency_matrix(graph):
-    """Convert a NetworkX graph to a CuPy-based adjacency matrix"""
-    adj_matrix = nx.to_numpy_array(graph)
+    """Convert a NetworkX graph to a CuPy-based adjacency matrix considering weights"""
+    adj_matrix = nx.to_numpy_array(graph, weight='weight')  # Preserve edge weights
     return cp.array(adj_matrix)  # Convert to CuPy array for GPU acceleration
 
 def find_optimal_k(adj_matrix, max_k=10):
