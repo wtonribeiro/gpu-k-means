@@ -14,7 +14,7 @@ import numpy as np
 import cupy as cp  # For GPU acceleration
 import cudf  # GPU-accelerated dataframe
 from cuml.cluster import KMeans  # GPU-based K-Means
-import matplotlib.pyplot as plt
+#import matplotlib.pyplot as plt
 
 
 def graph_to_adjacency_matrix(graph):
@@ -45,7 +45,7 @@ def compute_davies_bouldin(X, labels):
     return cp.mean(cp.array(dbi_scores))
 
 
-def find_optimal_k(adj_matrix, max_k=10):
+def find_optimal_k(adj_matrix, max_k=32):
     """Find the optimal number of clusters using the Elbow and DBI methods"""
     distortions = []
     dbi_scores = []
@@ -78,7 +78,7 @@ def find_optimal_k(adj_matrix, max_k=10):
     return best_k
 
 
-def perform_kmeans(graph, max_k=10):
+def perform_kmeans(graph, max_k=32):
     """Perform K-Means clustering on a graph using GPU acceleration"""
     adj_matrix = graph_to_adjacency_matrix(graph)
     optimal_k = find_optimal_k(adj_matrix, max_k)
