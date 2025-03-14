@@ -46,34 +46,35 @@ def compute_davies_bouldin(X, labels):
 
 
 def find_optimal_k(adj_matrix, max_k=10):
-    """Find the optimal number of clusters using the Elbow and manually calculated DBI methods"""
+    """Find the optimal number of clusters using the Elbow and DBI methods"""
     distortions = []
     dbi_scores = []
     k_range = range(2, max_k + 1)
+
+    # Ensure k_range is valid
+    if not k_range:
+        print("Error: max_k should be at least 2.")
+        return 2  # Default minimum
 
     # Convert CuPy array to cuDF DataFrame for cuML
     adj_df = cudf.DataFrame(cp.asnumpy(adj_matrix))
 
     for k in k_range:
-        kmeans = KMeans(n_clusters=k, random_state=42)
-        clusters = kmeans.fit_predict(adj_df)
-        distortions.append(kmeans.inertia_)
+        try:
+            kmeans = KMeans(n_clusters=k, random_state=42)
+            clusters = kmeans.fit_predict(adj_df)
 
-        # Calculate Davies-Bouldin Index manually on GPU
-        dbi_scores.append(compute_davies_bouldin(adj_matrix, clusters).get())
+            distortions.append(kmeans.inertia_)
+            dbi_scores.append(compute_davies_bouldin(adj_matrix, clusters).get())
 
-    # Plot the Elbow Method
-    plt.figure(figsize=(8, 4))
-    plt.plot(k_range, distortions, marker='o', label='WCSS (Elbow)')
-    plt.xlabel('Number of Clusters')
-    plt.ylabel('Within-Cluster Sum of Squares')
-    plt.title('Elbow Method')
-    plt.legend()
-    plt.show()
+        except Exception as e:
+            print(f"Skipping k={k} due to error: {e}")
 
-    # Find the best k from the lowest DBI score
+    if not dbi_scores:  # Prevent empty max() call
+        print("Error: No valid clustering results, defaulting to k=2")
+        return 2
+
     best_k = k_range[np.argmin(dbi_scores)]
-    print(f"Optimal K found (Davies-Bouldin Index): {best_k}")
     return best_k
 
 
