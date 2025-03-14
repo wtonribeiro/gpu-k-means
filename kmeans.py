@@ -53,7 +53,9 @@ def find_optimal_k(adj_matrix, max_k=32):
 
     # Ensure k_range is valid
     if not k_range:
+        print()
         print("Error: max_k should be at least 2.")
+        print()
         return 2  # Default minimum
 
     # Convert CuPy array to cuDF DataFrame for cuML
@@ -71,7 +73,9 @@ def find_optimal_k(adj_matrix, max_k=32):
             print(f"Skipping k={k} due to error: {e}")
 
     if not dbi_scores:  # Prevent empty max() call
+        print()
         print("Error: No valid clustering results, defaulting to k=2")
+        print()
         return 2
 
     best_k = k_range[np.argmin(dbi_scores)]
