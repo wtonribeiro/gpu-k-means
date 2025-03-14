@@ -17,7 +17,7 @@ def generate_weighted_graph(n=20, p=0.3):
     """Generate an undirected weighted graph with edge weights between 0.2 and 1.0."""
     G = nx.erdos_renyi_graph(n, p)  # Create random undirected graph
     for u, v in G.edges():
-        G[u][v]['weight'] = round(random.uniform(0.2, 1.0), 2)  # Assign random weights
+        G[u][v]['weight'] = round(random.uniform(2.0, 10.0), 2)  # Assign random weights
     return G
 
 
@@ -38,7 +38,7 @@ def hierarchical_clustering(graph, max_k=10):
             hierarchy[node] = cluster_id
             hierarchy_tree.add_node(node)  # Add original node to the tree
             if parent and parent != node:  # Avoid self-loops
-                weight = graph[parent][node]["weight"] if graph.has_edge(parent, node) else 0.2
+                weight = graph[parent][node]["weight"] if graph.has_edge(parent, node) else 2.0
                 hierarchy_tree.add_edge(parent, node, weight=weight)
             return {node: cluster_id}
 
@@ -67,7 +67,7 @@ def hierarchical_clustering(graph, max_k=10):
                 hierarchy_tree.add_node(representative)
 
                 if parent and parent != representative:  # Avoid self-loops
-                    weight = graph[parent][representative]["weight"] if graph.has_edge(parent, representative) else 0.2
+                    weight = graph[parent][representative]["weight"] if graph.has_edge(parent, representative) else 2.0
                     hierarchy_tree.add_edge(parent, representative, weight=weight)
 
                 cluster_map.update(recursive_clustering(sub_cluster, new_cluster_id, parent=representative))
