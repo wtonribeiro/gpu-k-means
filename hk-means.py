@@ -36,10 +36,10 @@ def hierarchical_clustering(graph, max_k=10):
         if len(subgraph.nodes) == 1:
             node = list(subgraph.nodes)[0]
             hierarchy[node] = cluster_id
-            hierarchy_tree.add_node(cluster_id)  # Add cluster node to the tree
-            if parent:
+            hierarchy_tree.add_node(node)  # Add original node to the tree
+            if parent and parent != node:  # Avoid self-loops
                 weight = graph[parent][node]["weight"] if graph.has_edge(parent, node) else 0.2
-                hierarchy_tree.add_edge(parent, cluster_id, weight=weight)
+                hierarchy_tree.add_edge(parent, node, weight=weight)
             return {node: cluster_id}
 
         local_max_k = min(max_k, len(subgraph.nodes))
