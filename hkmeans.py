@@ -13,6 +13,10 @@ import json
 from kmeans import perform_kmeans  # Import K-Means module
 
 
+import warnings
+warnings.filterwarnings("ignore")
+
+
 def generate_weighted_graph(n=20, p=0.3):
     """Generate an undirected weighted graph with edge weights between 0.2 and 1.0."""
     G = nx.erdos_renyi_graph(n, p)  # Create random undirected graph
@@ -21,7 +25,7 @@ def generate_weighted_graph(n=20, p=0.3):
     return G
 
 
-def hierarchical_clustering(graph, max_k=10):
+def hierarchical_clustering(graph, max_k=32):
     """Recursively apply K-Means clustering and build a hierarchy tree."""
     hierarchy = {}
     hierarchy_tree = nx.Graph()  # Hierarchical undirected graph (tree structure)
@@ -32,6 +36,9 @@ def hierarchical_clustering(graph, max_k=10):
         return max(page_ranks, key=page_ranks.get)  # Return node with highest score
 
     def recursive_clustering(subgraph, cluster_id, parent=None):
+        
+        print(parent, cluster_id)
+        
         """Recursive clustering function."""
         if len(subgraph.nodes) == 1:
             node = list(subgraph.nodes)[0]
