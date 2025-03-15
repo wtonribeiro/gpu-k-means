@@ -70,7 +70,9 @@ def find_optimal_k(adj_matrix, max_k=32):
             dbi_scores.append(compute_davies_bouldin(adj_matrix, clusters).get())
 
         except Exception as e:
-            print(f"Skipping k={k} due to error: {e}")
+            #print(f"Skipping k={k} due to error: {e}")
+            pass
+            
 
     if not dbi_scores:  # Prevent empty max() call
         #print()
