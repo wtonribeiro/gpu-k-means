@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-K-Means Clustering with Edge-Weight-Aware Distance Metric (GPU-Accelerated)
+GPU-accelerated K-Means with Manual Silhouette Score
 """
 
 import networkx as nx
@@ -14,95 +14,87 @@ def graph_to_distance_matrix(graph):
     """Convert edge weights to distance matrix (higher weights = shorter distance)"""
     adj_matrix = nx.to_numpy_array(graph, weight='weight', nonedge=0.0)
     
-    # Invert weights (weight=10 → distance=0.1, weight=2 → distance=0.5)
+    # Convert weights to distances with inversion
     with np.errstate(divide='ignore', invalid='ignore'):
         distance_matrix = np.divide(1.0, adj_matrix, where=adj_matrix!=0)
     
-    # Set non-edges to max distance (10x largest edge-based distance)
-    max_edge_distance = 0.5  # 1/min_weight (min_weight=2 in your case)
-    distance_matrix[adj_matrix == 0] = max_edge_distance * 10
+    # Handle non-edges with maximum distance (10x minimum edge distance)
+    max_distance = 10.0  # Corresponds to minimum weight of 0.1
+    distance_matrix[adj_matrix == 0] = max_distance
     
     return cp.array(distance_matrix)
 
-def compute_davies_bouldin(graph, labels):
-    """Edge-weight-aware DBI using original graph connectivity"""
-    nodes = list(graph.nodes())
-    labels = labels.get()  # Convert from CuPy array
-    n_clusters = len(np.unique(labels))
+def compute_silhouette(distance_matrix, labels):
+    """GPU-accelerated Silhouette Score implementation"""
+    labels = cp.asarray(labels)
+    unique_labels = cp.unique(labels)
+    n_clusters = len(unique_labels)
+    n_samples = distance_matrix.shape[0]
+
+    if n_clusters == 1:
+        return 0.0  # All points in one cluster
+
+    # Precompute masks for all clusters
+    masks = [labels == lbl for lbl in unique_labels]
     
-    # Precompute adjacency dictionary for faster lookups
-    adj_dict = {node: dict(graph[node]) for node in nodes}
-    
-    # Intra-cluster compactness
-    intra_scores = []
-    for cluster_id in range(n_clusters):
-        cluster_nodes = [nodes[i] for i, lbl in enumerate(labels) if lbl == cluster_id]
+    # Intra-cluster distances (a_i)
+    intra_dists = cp.zeros(n_samples)
+    for i, mask in enumerate(masks):
+        cluster_size = cp.sum(mask)
+        if cluster_size <= 1:
+            intra_dists[mask] = 0
+            continue
         
-        total_weight = 0.0
-        valid_pairs = 0
-        for i, u in enumerate(cluster_nodes):
-            for v in cluster_nodes[i+1:]:
-                if v in adj_dict[u]:
-                    total_weight += adj_dict[u][v]['weight']
-                    valid_pairs += 1
-        
-        avg_weight = total_weight / valid_pairs if valid_pairs > 0 else 0.0
-        intra_scores.append(1.0 / avg_weight if avg_weight > 0 else float('inf'))
-    
-    # Inter-cluster separation
-    dbi_scores = []
-    for i in range(n_clusters):
-        max_ratio = -np.inf
-        cluster_i = [nodes[idx] for idx, lbl in enumerate(labels) if lbl == i]
-        
-        for j in range(n_clusters):
-            if i == j:
-                continue
-                
-            cluster_j = [nodes[idx] for idx, lbl in enumerate(labels) if lbl == j]
+        # Exclude self-distance in intra-cluster calculation
+        cluster_distances = distance_matrix[mask][:, mask]
+        intra_dists[mask] = (cp.sum(cluster_distances, axis=1) - cp.diag(cluster_distances)) / (cluster_size - 1)
+
+    # Inter-cluster distances (b_i)
+    inter_dists = cp.full(n_samples, cp.inf)
+    for i, mask_i in enumerate(masks):
+        for j, mask_j in enumerate(masks[i+1:], start=i+1):
+            # Calculate mean distances between clusters
+            inter_means = cp.mean(distance_matrix[mask_i][:, mask_j], axis=1)
+            inter_dists[mask_i] = cp.minimum(inter_dists[mask_i], inter_means)
             
-            total_inter = 0.0
-            valid_pairs = 0
-            for u in cluster_i:
-                for v in cluster_j:
-                    if v in adj_dict[u]:
-                        total_inter += adj_dict[u][v]['weight']
-                        valid_pairs += 1
-            
-            avg_inter = total_inter / valid_pairs if valid_pairs > 0 else 0.0
-            separation = 1.0 / avg_inter if avg_inter > 0 else float('inf')
-            ratio = (intra_scores[i] + intra_scores[j]) / separation
-            max_ratio = max(max_ratio, ratio)
-        
-        dbi_scores.append(max_ratio)
-    
-    return np.mean(dbi_scores)
+            # Symmetric update for the other cluster
+            inter_means = cp.mean(distance_matrix[mask_j][:, mask_i], axis=1)
+            inter_dists[mask_j] = cp.minimum(inter_dists[mask_j], inter_means)
+
+    # Compute final silhouette scores
+    sil_scores = (inter_dists - intra_dists) / cp.maximum(intra_dists, inter_dists)
+    sil_scores = cp.nan_to_num(sil_scores, nan=0.0)
+    return float(cp.mean(sil_scores))
 
 def find_optimal_k(graph, max_k=32):
-    """Optimal k search using edge-aware DBI"""
+    """Find optimal cluster count using Silhouette Score"""
     distance_matrix = graph_to_distance_matrix(graph)
-    adj_df = cudf.DataFrame(cp.asnumpy(distance_matrix))
-    
-    dbi_scores = []
-    k_range = range(2, max_k+1)
-    
-    for k in k_range:
+    adj_df = cudf.DataFrame(distance_matrix.get())
+
+    best_score = -1.0
+    best_k = 2
+
+    for k in range(2, max_k+1):
         try:
             kmeans = KMeans(n_clusters=k, random_state=42)
             clusters = kmeans.fit_predict(adj_df)
-            dbi = compute_davies_bouldin(graph, clusters.to_cupy())
-            dbi_scores.append(dbi)
-        except:
+            
+            score = compute_silhouette(distance_matrix, clusters.to_cupy())
+            
+            if score > best_score:
+                best_score = score
+                best_k = k
+        except Exception as e:
             continue
-    
-    return k_range[np.argmin(dbi_scores)]
+
+    return best_k
 
 def perform_kmeans(graph, max_k=32):
-    """Full clustering workflow with edge-weight awareness"""
+    """Complete K-Means workflow with Silhouette optimization"""
     distance_matrix = graph_to_distance_matrix(graph)
     optimal_k = find_optimal_k(graph, max_k)
     
-    adj_df = cudf.DataFrame(cp.asnumpy(distance_matrix))
+    adj_df = cudf.DataFrame(distance_matrix.get())
     kmeans = KMeans(n_clusters=optimal_k, random_state=42)
     clusters = kmeans.fit_predict(adj_df)
     
@@ -111,12 +103,11 @@ def perform_kmeans(graph, max_k=32):
     clusters_cp = clusters.to_cupy()
     reps = {}
     for lbl in range(optimal_k):
-        mask = (clusters_cp == lbl)
+        mask = clusters_cp == lbl
         indices = cp.where(mask)[0]
         if len(indices) == 0:
             continue
             
-        # Get the node closest to cluster centroid
         centroid = kmeans.cluster_centers_[lbl]
         distances = cp.linalg.norm(distance_matrix[indices] - centroid, axis=1)
         min_idx = cp.argmin(distances)
@@ -124,11 +115,14 @@ def perform_kmeans(graph, max_k=32):
     
     return {n: int(clusters[i]) for i, n in enumerate(nodes)}, reps
 
-
-# Example Usage
+# Example usage
 if __name__ == "__main__":
-    # Create a sample graph
-    G = nx.erdos_renyi_graph(n=100, p=0.05)  # Random graph with 100 nodes
-    clusters, reps = perform_kmeans(G, max_k=10)
-    print("Cluster Assignments:", clusters)
-    print("Representative Nodes:", reps)
+    # Create sample graph
+    G = nx.erdos_renyi_graph(n=100, p=0.1)
+    for u, v in G.edges():
+        G[u][v]['weight'] = round(np.random.uniform(2.0, 10.0), 2)
+    
+    # Perform clustering
+    clusters, representatives = perform_kmeans(G)
+    print("Cluster assignments:", clusters)
+    print("Representative nodes:", representatives)
