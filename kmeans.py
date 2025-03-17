@@ -53,9 +53,6 @@ def find_optimal_k(adj_matrix, max_k=32):
 
     # Ensure k_range is valid
     if not k_range:
-        #print()
-        #print("Error: max_k should be at least 2.")
-        #print()
         return 2  # Default minimum
 
     # Convert CuPy array to cuDF DataFrame for cuML
@@ -70,14 +67,10 @@ def find_optimal_k(adj_matrix, max_k=32):
             dbi_scores.append(compute_davies_bouldin(adj_matrix, clusters).get())
 
         except Exception as e:
-            #print(f"Skipping k={k} due to error: {e}")
             pass
             
 
     if not dbi_scores:  # Prevent empty max() call
-        #print()
-        #print("Error: No valid clustering results, defaulting to k=2")
-        #print()
         return 2
 
     best_k = k_range[np.argmin(dbi_scores)]
@@ -85,7 +78,7 @@ def find_optimal_k(adj_matrix, max_k=32):
 
 
 def perform_kmeans(graph, max_k=32):
-    """Perform K-Means clustering on a graph using GPU acceleration"""
+    """Perform K-Means clustering on a graph using GPU acceleration and return cluster assignments and representatives."""
     adj_matrix = graph_to_adjacency_matrix(graph)
     optimal_k = find_optimal_k(adj_matrix, max_k)
 
@@ -96,14 +89,40 @@ def perform_kmeans(graph, max_k=32):
     kmeans = KMeans(n_clusters=optimal_k, random_state=42)
     clusters = kmeans.fit_predict(adj_df)
 
-    # Convert results to dictionary {node: cluster}
-    cluster_assignment = {node: int(clusters[i]) for i, node in enumerate(graph.nodes())}
-    return cluster_assignment
+    # Get cluster centers and convert to CuPy
+    cluster_centers = cp.asarray(kmeans.cluster_centers_)
+    clusters_cupy = clusters.to_cupy()  # Convert to CuPy array
+
+    nodes = list(graph.nodes())
+    representatives = {}
+
+    for label in range(optimal_k):
+        # Get indices of nodes in the current cluster
+        mask = (clusters_cupy == label)
+        indices = cp.where(mask)[0]
+        if len(indices) == 0:
+            continue  # Skip empty clusters
+        
+        # Extract rows from adjacency matrix for the cluster
+        cluster_data = adj_matrix[indices]
+        centroid = cluster_centers[label]
+        
+        # Compute distances and find closest node
+        distances = cp.linalg.norm(cluster_data - centroid, axis=1)
+        min_idx = cp.argmin(distances)
+        representative_node = nodes[indices[min_idx].item()]
+        representatives[label] = representative_node
+
+    # Map nodes to their clusters
+    cluster_assignment = {node: int(clusters[i]) for i, node in enumerate(nodes)}
+
+    return cluster_assignment, representatives
 
 
 # Example Usage
 if __name__ == "__main__":
     # Create a sample graph
     G = nx.erdos_renyi_graph(n=100, p=0.05)  # Random graph with 100 nodes
-    clusters = perform_kmeans(G, max_k=10)
+    clusters, reps = perform_kmeans(G, max_k=10)
     print("Cluster Assignments:", clusters)
+    print("Representative Nodes:", reps)
