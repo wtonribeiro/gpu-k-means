@@ -1,122 +1,128 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-Created on Wed Mar 12 08:19:03 2025
-
-@author: washigtonsegundo
+K-Means Clustering with Edge-Weight-Aware Distance Metric (GPU-Accelerated)
 """
-
-# Required Libraries (Install with the following commands if not installed):
-# !pip install networkx numpy cupy rapidsai-cuml cudf matplotlib
 
 import networkx as nx
 import numpy as np
-import cupy as cp  # For GPU acceleration
-import cudf  # GPU-accelerated dataframe
-from cuml.cluster import KMeans  # GPU-based K-Means
-#import matplotlib.pyplot as plt
+import cupy as cp
+import cudf
+from cuml.cluster import KMeans
 
+def graph_to_distance_matrix(graph):
+    """Convert edge weights to distance matrix (higher weights = shorter distance)"""
+    adj_matrix = nx.to_numpy_array(graph, weight='weight', nonedge=0.0)
+    
+    # Invert weights (weight=10 → distance=0.1, weight=2 → distance=0.5)
+    with np.errstate(divide='ignore', invalid='ignore'):
+        distance_matrix = np.divide(1.0, adj_matrix, where=adj_matrix!=0)
+    
+    # Set non-edges to max distance (10x largest edge-based distance)
+    max_edge_distance = 0.5  # 1/min_weight (min_weight=2 in your case)
+    distance_matrix[adj_matrix == 0] = max_edge_distance * 10
+    
+    return cp.array(distance_matrix)
 
-def graph_to_adjacency_matrix(graph):
-    """Convert a NetworkX graph to a CuPy-based adjacency matrix considering weights"""
-    adj_matrix = nx.to_numpy_array(graph, weight='weight')  # Preserve edge weights
-    return cp.array(adj_matrix)  # Convert to CuPy array for GPU acceleration
-
-
-def compute_davies_bouldin(X, labels):
-    """Compute Davies-Bouldin Index manually on the GPU"""
-    n_clusters = len(cp.unique(labels))
-    cluster_centers = cp.array([X[labels == i].mean(axis=0) for i in range(n_clusters)])
-    intra_cluster_distances = cp.array([
-        cp.linalg.norm(X[labels == i] - cluster_centers[i], axis=1).mean()
-        for i in range(n_clusters)
-    ])
-
+def compute_davies_bouldin(graph, labels):
+    """Edge-weight-aware DBI using original graph connectivity"""
+    nodes = list(graph.nodes())
+    labels = labels.get()  # Convert from CuPy array
+    n_clusters = len(np.unique(labels))
+    
+    # Precompute adjacency dictionary for faster lookups
+    adj_dict = {node: dict(graph[node]) for node in nodes}
+    
+    # Intra-cluster compactness
+    intra_scores = []
+    for cluster_id in range(n_clusters):
+        cluster_nodes = [nodes[i] for i, lbl in enumerate(labels) if lbl == cluster_id]
+        
+        total_weight = 0.0
+        valid_pairs = 0
+        for i, u in enumerate(cluster_nodes):
+            for v in cluster_nodes[i+1:]:
+                if v in adj_dict[u]:
+                    total_weight += adj_dict[u][v]['weight']
+                    valid_pairs += 1
+        
+        avg_weight = total_weight / valid_pairs if valid_pairs > 0 else 0.0
+        intra_scores.append(1.0 / avg_weight if avg_weight > 0 else float('inf'))
+    
+    # Inter-cluster separation
     dbi_scores = []
     for i in range(n_clusters):
-        scores = []
+        max_ratio = -np.inf
+        cluster_i = [nodes[idx] for idx, lbl in enumerate(labels) if lbl == i]
+        
         for j in range(n_clusters):
-            if i != j:
-                inter_cluster_dist = cp.linalg.norm(cluster_centers[i] - cluster_centers[j])
-                score = (intra_cluster_distances[i] + intra_cluster_distances[j]) / inter_cluster_dist
-                scores.append(score)
-        dbi_scores.append(max(scores))
+            if i == j:
+                continue
+                
+            cluster_j = [nodes[idx] for idx, lbl in enumerate(labels) if lbl == j]
+            
+            total_inter = 0.0
+            valid_pairs = 0
+            for u in cluster_i:
+                for v in cluster_j:
+                    if v in adj_dict[u]:
+                        total_inter += adj_dict[u][v]['weight']
+                        valid_pairs += 1
+            
+            avg_inter = total_inter / valid_pairs if valid_pairs > 0 else 0.0
+            separation = 1.0 / avg_inter if avg_inter > 0 else float('inf')
+            ratio = (intra_scores[i] + intra_scores[j]) / separation
+            max_ratio = max(max_ratio, ratio)
+        
+        dbi_scores.append(max_ratio)
     
-    return cp.mean(cp.array(dbi_scores))
+    return np.mean(dbi_scores)
 
-
-def find_optimal_k(adj_matrix, max_k=32):
-    """Find the optimal number of clusters using the Elbow and DBI methods"""
-    distortions = []
+def find_optimal_k(graph, max_k=32):
+    """Optimal k search using edge-aware DBI"""
+    distance_matrix = graph_to_distance_matrix(graph)
+    adj_df = cudf.DataFrame(cp.asnumpy(distance_matrix))
+    
     dbi_scores = []
-    k_range = range(2, max_k + 1)
-
-    # Ensure k_range is valid
-    if not k_range:
-        return 2  # Default minimum
-
-    # Convert CuPy array to cuDF DataFrame for cuML
-    adj_df = cudf.DataFrame(cp.asnumpy(adj_matrix))
-
+    k_range = range(2, max_k+1)
+    
     for k in k_range:
         try:
             kmeans = KMeans(n_clusters=k, random_state=42)
             clusters = kmeans.fit_predict(adj_df)
-
-            distortions.append(kmeans.inertia_)
-            dbi_scores.append(compute_davies_bouldin(adj_matrix, clusters).get())
-
-        except Exception as e:
-            pass
-            
-
-    if not dbi_scores:  # Prevent empty max() call
-        return 2
-
-    best_k = k_range[np.argmin(dbi_scores)]
-    return best_k
-
+            dbi = compute_davies_bouldin(graph, clusters.to_cupy())
+            dbi_scores.append(dbi)
+        except:
+            continue
+    
+    return k_range[np.argmin(dbi_scores)]
 
 def perform_kmeans(graph, max_k=32):
-    """Perform K-Means clustering on a graph using GPU acceleration and return cluster assignments and representatives."""
-    adj_matrix = graph_to_adjacency_matrix(graph)
-    optimal_k = find_optimal_k(adj_matrix, max_k)
-
-    # Convert CuPy array to cuDF DataFrame for cuML processing
-    adj_df = cudf.DataFrame(cp.asnumpy(adj_matrix))
-
-    # Run final K-Means with optimal k
+    """Full clustering workflow with edge-weight awareness"""
+    distance_matrix = graph_to_distance_matrix(graph)
+    optimal_k = find_optimal_k(graph, max_k)
+    
+    adj_df = cudf.DataFrame(cp.asnumpy(distance_matrix))
     kmeans = KMeans(n_clusters=optimal_k, random_state=42)
     clusters = kmeans.fit_predict(adj_df)
-
-    # Get cluster centers and convert to CuPy
-    cluster_centers = cp.asarray(kmeans.cluster_centers_)
-    clusters_cupy = clusters.to_cupy()  # Convert to CuPy array
-
+    
+    # Find representatives closest to centroids
     nodes = list(graph.nodes())
-    representatives = {}
-
-    for label in range(optimal_k):
-        # Get indices of nodes in the current cluster
-        mask = (clusters_cupy == label)
+    clusters_cp = clusters.to_cupy()
+    reps = {}
+    for lbl in range(optimal_k):
+        mask = (clusters_cp == lbl)
         indices = cp.where(mask)[0]
         if len(indices) == 0:
-            continue  # Skip empty clusters
-        
-        # Extract rows from adjacency matrix for the cluster
-        cluster_data = adj_matrix[indices]
-        centroid = cluster_centers[label]
-        
-        # Compute distances and find closest node
-        distances = cp.linalg.norm(cluster_data - centroid, axis=1)
+            continue
+            
+        # Get the node closest to cluster centroid
+        centroid = kmeans.cluster_centers_[lbl]
+        distances = cp.linalg.norm(distance_matrix[indices] - centroid, axis=1)
         min_idx = cp.argmin(distances)
-        representative_node = nodes[indices[min_idx].item()]
-        representatives[label] = representative_node
-
-    # Map nodes to their clusters
-    cluster_assignment = {node: int(clusters[i]) for i, node in enumerate(nodes)}
-
-    return cluster_assignment, representatives
+        reps[lbl] = nodes[indices[min_idx].item()]
+    
+    return {n: int(clusters[i]) for i, n in enumerate(nodes)}, reps
 
 
 # Example Usage
