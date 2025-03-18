@@ -1,135 +1,109 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-Created on Wed Mar 12 08:19:03 2025
-
-@author: washigtonsegundo
+Modified K-Means with Silhouette Score for optimal cluster selection
 """
 
-# Required Libraries (Install with the following commands if not installed):
-# !pip install networkx numpy cupy rapidsai-cuml cudf matplotlib
-
 import networkx as nx
-import numpy as np
-import cupy as cp  # For GPU acceleration
-import cudf  # GPU-accelerated dataframe
-from cuml.cluster import KMeans  # GPU-based K-Means
-#import matplotlib.pyplot as plt
-
+import cupy as cp
+import cudf
+from cuml.cluster import KMeans
 
 def graph_to_adjacency_matrix(graph):
-    """Convert a NetworkX graph to a CuPy-based adjacency matrix considering weights"""
-    adj_matrix = nx.to_numpy_array(graph, weight='weight')  # Preserve edge weights
-    return cp.array(adj_matrix)  # Convert to CuPy array for GPU acceleration
+    """Convert NetworkX graph to cuPy adjacency matrix"""
+    adj_matrix = nx.to_numpy_array(graph, weight='weight')
+    return cp.array(adj_matrix)
 
+def compute_silhouette_score(X, labels):
+    """Compute Silhouette Score manually on GPU"""
+    n_samples = X.shape[0]
+    labels = cp.asarray(labels)  # Ensure labels are Cupy array
+    unique_labels = cp.unique(labels)
+    n_clusters = len(unique_labels)
 
-def compute_davies_bouldin(X, labels):
-    """Compute Davies-Bouldin Index manually on the GPU"""
-    n_clusters = len(cp.unique(labels))
-    cluster_centers = cp.array([X[labels == i].mean(axis=0) for i in range(n_clusters)])
-    intra_cluster_distances = cp.array([
-        cp.linalg.norm(X[labels == i] - cluster_centers[i], axis=1).mean()
-        for i in range(n_clusters)
-    ])
+    if n_clusters == 1:
+        return 0.0
 
-    dbi_scores = []
-    for i in range(n_clusters):
-        scores = []
-        for j in range(n_clusters):
-            if i != j:
-                inter_cluster_dist = cp.linalg.norm(cluster_centers[i] - cluster_centers[j])
-                score = (intra_cluster_distances[i] + intra_cluster_distances[j]) / inter_cluster_dist
-                scores.append(score)
-        dbi_scores.append(max(scores))
+    # Vectorized pairwise distance calculation
+    pairwise_dists = cp.linalg.norm(X[:, None] - X, axis=2)
+
+    # Precompute cluster masks
+    cluster_masks = {label.item(): (labels == label) for label in unique_labels}
+
+    silhouette_scores = cp.zeros(n_samples)
     
-    return cp.mean(cp.array(dbi_scores))
+    for i in range(n_samples):
+        label_i = labels[i].item()  # Convert to Python int
+        mask_a = cluster_masks[label_i]
+        
+        # Intra-cluster distance (a_i)
+        a_i = cp.mean(pairwise_dists[i, mask_a])
+        
+        # Inter-cluster distances (b_i)
+        b_values = []
+        for label_j in cluster_masks:
+            if label_j != label_i:
+                b_values.append(cp.mean(pairwise_dists[i, cluster_masks[label_j]]))
+        
+        b_i = cp.min(cp.array(b_values)) if b_values else 0.0
+        silhouette_scores[i] = (b_i - a_i) / cp.maximum(a_i, b_i)
 
+    return cp.nanmean(silhouette_scores).item()  # Return Python float
 
 def find_optimal_k(adj_matrix, max_k=32):
-    """Find the optimal number of clusters using the Elbow and DBI methods"""
-    distortions = []
-    dbi_scores = []
-    k_range = range(2, max_k + 1)
-
-    # Ensure k_range is valid
-    if not k_range:
-        return 2  # Default minimum
-
-    # Convert CuPy array to cuDF DataFrame for cuML
+    """Find optimal clusters using Silhouette Score"""
+    silhouette_scores = []
+    k_range = list(range(2, max_k + 1))  # Convert to list for safe indexing
+    
     adj_df = cudf.DataFrame(cp.asnumpy(adj_matrix))
 
     for k in k_range:
         try:
             kmeans = KMeans(n_clusters=k, random_state=42)
             clusters = kmeans.fit_predict(adj_df)
-
-            distortions.append(kmeans.inertia_)
-            dbi_scores.append(compute_davies_bouldin(adj_matrix, clusters).get())
-
+            score = compute_silhouette_score(adj_matrix, clusters.to_cupy())
+            silhouette_scores.append(score)
         except Exception as e:
-            pass
-            
+            silhouette_scores.append(-1)  # Invalid score
 
-    if not dbi_scores:  # Prevent empty max() call
-        return 2
-
-    best_k = k_range[np.argmin(dbi_scores)]
+    # Find k with highest silhouette score
+    valid_scores = cp.array([s if s != -1 else -cp.inf for s in silhouette_scores])
+    best_idx = cp.argmax(valid_scores).item()  # Convert to Python int
+    best_k = k_range[best_idx]
+    
     return best_k
 
-
-
 def perform_kmeans(graph, max_k=32):
-    """Perform K-Means clustering on a graph using GPU acceleration and return cluster assignments and representatives."""
-    adj_matrix = graph_to_adjacency_matrix(graph)  # Returns cuPy array
+    """Perform K-Means clustering with Silhouette-optimized K"""
+    adj_matrix = graph_to_adjacency_matrix(graph)
     optimal_k = find_optimal_k(adj_matrix, max_k)
 
-    # Convert cuPy array to cuDF DataFrame via numpy (temporary workaround)
     adj_df = cudf.DataFrame(cp.asnumpy(adj_matrix))
-
-    # Run K-Means
     kmeans = KMeans(n_clusters=optimal_k, random_state=42)
     clusters = kmeans.fit_predict(adj_df)
 
-    # Get cluster centers (already in CPU memory due to .asnumpy())
-    cluster_centers = kmeans.cluster_centers_.values  # Get as numpy array
-    cluster_centers_cp = cp.asarray(cluster_centers)  # Convert to cuPy array
-
-    # Get node order and initialize representatives
+    # Representative selection logic (same as previous version)
+    clusters_cp = cp.asarray(clusters.to_numpy())
     nodes_order = list(graph.nodes())
     cluster_to_rep = {}
     
-    # Convert clusters to cuPy array
-    clusters_cp = cp.asarray(clusters.to_numpy())  # Explicit conversion
+    cluster_centers_cp = cp.asarray(kmeans.cluster_centers_.values)
 
     for label in range(optimal_k):
-        # Get indices of nodes in this cluster
         mask = clusters_cp == label
         indices = cp.where(mask)[0]
-
         if len(indices) == 0:
             continue
 
-        # Get rows from original adjacency matrix (cuPy array)
         cluster_rows = adj_matrix[indices]
-
-        # Get cluster center and reshape for broadcasting
         center = cluster_centers_cp[label].reshape(1, -1)
-
-        # Compute distances (all GPU operations)
         distances = cp.linalg.norm(cluster_rows - center, axis=1)
-
-        # Find representative node
         min_idx = cp.argmin(distances).item()
-        representative_node = nodes_order[indices[min_idx].item()]
-        cluster_to_rep[label] = representative_node
+        cluster_to_rep[label] = nodes_order[indices[min_idx].item()]
 
-    # Convert clusters to dictionary
-    cluster_assignment = {
-        node: int(clusters.iloc[i])  # Directly use cuDF Series index
-        for i, node in enumerate(nodes_order)
-    }
-
+    cluster_assignment = {node: int(clusters.iloc[i]) for i, node in enumerate(nodes_order)}
     return cluster_assignment, cluster_to_rep
+
 
 # Example Usage
 if __name__ == "__main__":
