@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-Hierarchical Clustering with Tree Saving (No Self-Loops) and PageRank Selection
+Hierarchical Clustering with Tree Saving (No Self-Loops) and Centroid Selection
 
 @author: wtonr
 """
@@ -10,7 +10,8 @@ import networkx as nx
 import matplotlib.pyplot as plt
 import random
 import json
-from kmeans import perform_kmeans  # Import K-Means module
+from kmeans import perform_kmeans, graph_to_adjacency_matrix  # Import K-Means module and graph_to_adjacency_matrix
+import cupy as cp  # Import cupy for GPU operations
 
 
 import warnings
@@ -30,10 +31,13 @@ def hierarchical_clustering(graph, max_k=32):
     hierarchy = {}
     hierarchy_tree = nx.Graph()  # Hierarchical undirected graph (tree structure)
 
-    def get_representative_node(subgraph):
-        """Select the node with the highest PageRank as the representative."""
-        page_ranks = nx.pagerank(subgraph)  # Compute PageRank scores
-        return max(page_ranks, key=page_ranks.get)  # Return node with highest score
+    # Compute root node as the global centroid
+    adj_matrix = graph_to_adjacency_matrix(graph)
+    global_center = adj_matrix.mean(axis=0)
+    nodes_order = list(graph.nodes())
+    distances = cp.linalg.norm(adj_matrix - global_center, axis=1)
+    root_node_idx = cp.argmin(distances).item()
+    root_node = nodes_order[root_node_idx]
 
     def recursive_clustering(subgraph, cluster_id, parent=None):
         
@@ -50,25 +54,23 @@ def hierarchical_clustering(graph, max_k=32):
             return {node: cluster_id}
 
         local_max_k = min(max_k, len(subgraph.nodes))
-        clusters = perform_kmeans(subgraph, local_max_k)
+        cluster_assignment, cluster_to_rep = perform_kmeans(subgraph, local_max_k)
 
-        if not clusters or len(set(clusters.values())) == 1:
+        if not cluster_assignment or len(set(cluster_assignment.values())) == 1:
             cluster_map = {node: f"{cluster_id}-{i}" for i, node in enumerate(subgraph.nodes)}
         else:
             cluster_map = {}
-            unique_labels = set(clusters.values())
-
-            representatives = {}  # Store representative nodes per cluster
+            unique_labels = set(cluster_assignment.values())
 
             for cluster_label in unique_labels:
-                sub_nodes = [node for node, label in clusters.items() if label == cluster_label]
-                if not sub_nodes or len(sub_nodes) == len(subgraph.nodes):
+                sub_nodes = [node for node, label in cluster_assignment.items() if label == cluster_label]
+                if not sub_nodes:
+                    continue
+                if len(sub_nodes) == len(subgraph.nodes):
                     cluster_map = {node: f"{cluster_id}-{i}" for i, node in enumerate(subgraph.nodes)}
                     break
 
-                sub_cluster = subgraph.subgraph(sub_nodes)
-                representative = get_representative_node(sub_cluster)  # Select best node
-                representatives[cluster_label] = representative
+                representative = cluster_to_rep[cluster_label]
 
                 new_cluster_id = f"{cluster_id}-{cluster_label}"
                 hierarchy_tree.add_node(representative)
@@ -77,12 +79,12 @@ def hierarchical_clustering(graph, max_k=32):
                     weight = graph[parent][representative]["weight"] if graph.has_edge(parent, representative) else 2.0
                     hierarchy_tree.add_edge(parent, representative, weight=weight)
 
+                sub_cluster = subgraph.subgraph(sub_nodes)
                 cluster_map.update(recursive_clustering(sub_cluster, new_cluster_id, parent=representative))
 
         return cluster_map
 
     # Start clustering process
-    root_node = get_representative_node(graph)  # Root representative
     hierarchy = recursive_clustering(graph, cluster_id="root", parent=root_node)
 
     # Assign hierarchy labels as node attributes in the original graph

@@ -53,9 +53,6 @@ def find_optimal_k(adj_matrix, max_k=32):
 
     # Ensure k_range is valid
     if not k_range:
-        #print()
-        #print("Error: max_k should be at least 2.")
-        #print()
         return 2  # Default minimum
 
     # Convert CuPy array to cuDF DataFrame for cuML
@@ -70,40 +67,74 @@ def find_optimal_k(adj_matrix, max_k=32):
             dbi_scores.append(compute_davies_bouldin(adj_matrix, clusters).get())
 
         except Exception as e:
-            #print(f"Skipping k={k} due to error: {e}")
             pass
             
 
     if not dbi_scores:  # Prevent empty max() call
-        #print()
-        #print("Error: No valid clustering results, defaulting to k=2")
-        #print()
         return 2
 
     best_k = k_range[np.argmin(dbi_scores)]
     return best_k
 
 
+
 def perform_kmeans(graph, max_k=32):
-    """Perform K-Means clustering on a graph using GPU acceleration"""
-    adj_matrix = graph_to_adjacency_matrix(graph)
+    """Perform K-Means clustering on a graph using GPU acceleration and return cluster assignments and representatives."""
+    adj_matrix = graph_to_adjacency_matrix(graph)  # Returns cuPy array
     optimal_k = find_optimal_k(adj_matrix, max_k)
 
-    # Convert CuPy array to cuDF DataFrame for cuML processing
+    # Convert cuPy array to cuDF DataFrame via numpy (temporary workaround)
     adj_df = cudf.DataFrame(cp.asnumpy(adj_matrix))
 
-    # Run final K-Means with optimal k
+    # Run K-Means
     kmeans = KMeans(n_clusters=optimal_k, random_state=42)
     clusters = kmeans.fit_predict(adj_df)
 
-    # Convert results to dictionary {node: cluster}
-    cluster_assignment = {node: int(clusters[i]) for i, node in enumerate(graph.nodes())}
-    return cluster_assignment
+    # Get cluster centers (already in CPU memory due to .asnumpy())
+    cluster_centers = kmeans.cluster_centers_.values  # Get as numpy array
+    cluster_centers_cp = cp.asarray(cluster_centers)  # Convert to cuPy array
 
+    # Get node order and initialize representatives
+    nodes_order = list(graph.nodes())
+    cluster_to_rep = {}
+    
+    # Convert clusters to cuPy array
+    clusters_cp = cp.asarray(clusters.to_numpy())  # Explicit conversion
+
+    for label in range(optimal_k):
+        # Get indices of nodes in this cluster
+        mask = clusters_cp == label
+        indices = cp.where(mask)[0]
+
+        if len(indices) == 0:
+            continue
+
+        # Get rows from original adjacency matrix (cuPy array)
+        cluster_rows = adj_matrix[indices]
+
+        # Get cluster center and reshape for broadcasting
+        center = cluster_centers_cp[label].reshape(1, -1)
+
+        # Compute distances (all GPU operations)
+        distances = cp.linalg.norm(cluster_rows - center, axis=1)
+
+        # Find representative node
+        min_idx = cp.argmin(distances).item()
+        representative_node = nodes_order[indices[min_idx].item()]
+        cluster_to_rep[label] = representative_node
+
+    # Convert clusters to dictionary
+    cluster_assignment = {
+        node: int(clusters.iloc[i])  # Directly use cuDF Series index
+        for i, node in enumerate(nodes_order)
+    }
+
+    return cluster_assignment, cluster_to_rep
 
 # Example Usage
 if __name__ == "__main__":
     # Create a sample graph
     G = nx.erdos_renyi_graph(n=100, p=0.05)  # Random graph with 100 nodes
-    clusters = perform_kmeans(G, max_k=10)
+    clusters, reps = perform_kmeans(G, max_k=10)
     print("Cluster Assignments:", clusters)
+    print("Cluster Representatives:", reps)
