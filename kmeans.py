@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-Modified K-Means with Silhouette Score for optimal cluster selection
+GPU-accelerated K-Means with Explicit Data Handling
 """
 
 import networkx as nx
@@ -10,105 +10,127 @@ import cudf
 from cuml.cluster import KMeans
 
 def graph_to_adjacency_matrix(graph):
-    """Convert NetworkX graph to cuPy adjacency matrix"""
-    adj_matrix = nx.to_numpy_array(graph, weight='weight')
-    return cp.array(adj_matrix)
+    """Convert graph to normalized distance matrix using edge weights"""
+    nodes = list(graph.nodes())
+    n = len(nodes)
+    node_idx = {node: i for i, node in enumerate(nodes)}
+    
+    # Initialize distance matrix with inverse weights
+    dist_matrix = cp.full((n, n), cp.inf, dtype=cp.float32)
+    cp.fill_diagonal(dist_matrix, 0)
+    
+    for u, v, data in graph.edges(data=True):
+        i, j = node_idx[u], node_idx[v]
+        dist = 1 / data['weight']  # Higher weight = shorter distance
+        dist_matrix[i, j] = dist_matrix[j, i] = cp.minimum(dist_matrix[i, j], dist)
+    
+    # Floyd-Warshall shortest paths
+    for k in range(n):
+        dist_matrix = cp.minimum(dist_matrix, dist_matrix[:, k:k+1] + dist_matrix[k:k+1, :])
+    
+    # Normalize
+    return (dist_matrix - cp.mean(dist_matrix)) / cp.std(dist_matrix)
 
 def compute_silhouette_score(X, labels):
-    """Compute Silhouette Score manually on GPU"""
-    n_samples = X.shape[0]
-    labels = cp.asarray(labels)  # Ensure labels are Cupy array
+    """GPU-accelerated silhouette score with explicit data handling"""
+    labels = cp.asarray(labels)
     unique_labels = cp.unique(labels)
     n_clusters = len(unique_labels)
-
+    
     if n_clusters == 1:
         return 0.0
 
-    # Vectorized pairwise distance calculation
-    pairwise_dists = cp.linalg.norm(X[:, None] - X, axis=2)
-
-    # Precompute cluster masks
-    cluster_masks = {label.item(): (labels == label) for label in unique_labels}
-
-    silhouette_scores = cp.zeros(n_samples)
+    intra_dists = cp.zeros(X.shape[0], dtype=cp.float32)
+    inter_dists = cp.full(X.shape[0], cp.inf, dtype=cp.float32)
     
-    for i in range(n_samples):
-        label_i = labels[i].item()  # Convert to Python int
-        mask_a = cluster_masks[label_i]
+    for label in unique_labels:
+        mask = labels == label
+        cluster_points = X[mask]
         
-        # Intra-cluster distance (a_i)
-        a_i = cp.mean(pairwise_dists[i, mask_a])
+        # Intra-cluster distances
+        if cluster_points.shape[0] > 1:
+            intra_dists[mask] = cp.mean(cluster_points[:, mask], axis=1)
         
-        # Inter-cluster distances (b_i)
-        b_values = []
-        for label_j in cluster_masks:
-            if label_j != label_i:
-                b_values.append(cp.mean(pairwise_dists[i, cluster_masks[label_j]]))
-        
-        b_i = cp.min(cp.array(b_values)) if b_values else 0.0
-        silhouette_scores[i] = (b_i - a_i) / cp.maximum(a_i, b_i)
+        # Inter-cluster distances
+        for other_label in unique_labels:
+            if other_label != label and cp.sum(labels == other_label) > 0:
+                inter_dists[mask] = cp.minimum(
+                    inter_dists[mask],
+                    cp.mean(cluster_points[:, labels == other_label], axis=1)
+                )
 
-    return cp.nanmean(silhouette_scores).item()  # Return Python float
+    sil_scores = (inter_dists - intra_dists) / cp.maximum(intra_dists, inter_dists)
+    return cp.nanmean(sil_scores).item()
 
 def find_optimal_k(adj_matrix, max_k=32):
-    """Find optimal clusters using Silhouette Score"""
+    """Find optimal clusters with explicit GPU data"""
+    k_range = list(range(2, max_k + 1))
     silhouette_scores = []
-    k_range = list(range(2, max_k + 1))  # Convert to list for safe indexing
     
-    adj_df = cudf.DataFrame(cp.asnumpy(adj_matrix))
-
+    # Create cuDF DataFrame directly from cuPy array
+    adj_df = cudf.DataFrame(adj_matrix.astype(cp.float32))
+    
     for k in k_range:
         try:
             kmeans = KMeans(n_clusters=k, random_state=42)
             clusters = kmeans.fit_predict(adj_df)
-            score = compute_silhouette_score(adj_matrix, clusters.to_cupy())
+            score = compute_silhouette_score(adj_matrix, clusters.values)
             silhouette_scores.append(score)
-        except Exception as e:
-            silhouette_scores.append(-1)  # Invalid score
-
-    # Find k with highest silhouette score
-    valid_scores = cp.array([s if s != -1 else -cp.inf for s in silhouette_scores])
-    best_idx = cp.argmax(valid_scores).item()  # Convert to Python int
-    best_k = k_range[best_idx]
+        except:
+            silhouette_scores.append(-1)
     
-    return best_k
+    best_idx = cp.nanargmax(cp.array(silhouette_scores)).item()
+    return k_range[best_idx]
 
 def perform_kmeans(graph, max_k=32):
-    """Perform K-Means clustering with Silhouette-optimized K"""
+    """K-Means with explicit GPU data handling"""
     adj_matrix = graph_to_adjacency_matrix(graph)
     optimal_k = find_optimal_k(adj_matrix, max_k)
 
-    adj_df = cudf.DataFrame(cp.asnumpy(adj_matrix))
+    # Create cuDF DataFrame directly from cuPy array
+    adj_df = cudf.DataFrame(adj_matrix.astype(cp.float32))
+    
     kmeans = KMeans(n_clusters=optimal_k, random_state=42)
     clusters = kmeans.fit_predict(adj_df)
-
-    # Representative selection logic (same as previous version)
-    clusters_cp = cp.asarray(clusters.to_numpy())
-    nodes_order = list(graph.nodes())
+    
+    # Convert cluster centers to cuPy array explicitly
+    cluster_centers = cp.asarray(kmeans.cluster_centers_.values)  # Critical fix
+    nodes = list(graph.nodes())
     cluster_to_rep = {}
     
-    cluster_centers_cp = cp.asarray(kmeans.cluster_centers_.values)
-
     for label in range(optimal_k):
-        mask = clusters_cp == label
-        indices = cp.where(mask)[0]
-        if len(indices) == 0:
+        mask = clusters.values == label
+        if cp.sum(mask) == 0:
             continue
+            
+        # GPU-based indexing
+        indices = cp.where(mask)[0]
+        cluster_points = adj_matrix[indices]
+        
+        # Reshape using cupy
+        centroid = cluster_centers[label].reshape(1, -1)  # Now works
+        
+        # Distance calculation on GPU
+        distances = cp.linalg.norm(cluster_points - centroid, axis=1)
+        rep_idx = cp.argmin(distances).item()
+        cluster_to_rep[label] = nodes[indices[rep_idx].item()]
+    
+    return {node: int(clusters.iloc[i]) for i, node in enumerate(nodes)}, cluster_to_rep
 
-        cluster_rows = adj_matrix[indices]
-        center = cluster_centers_cp[label].reshape(1, -1)
-        distances = cp.linalg.norm(cluster_rows - center, axis=1)
-        min_idx = cp.argmin(distances).item()
-        cluster_to_rep[label] = nodes_order[indices[min_idx].item()]
+import random
 
-    cluster_assignment = {node: int(clusters.iloc[i]) for i, node in enumerate(nodes_order)}
-    return cluster_assignment, cluster_to_rep
+def generate_weighted_graph(n=20, p=0.3):
+    """Generate weighted undirected graph"""
+    G = nx.erdos_renyi_graph(n, p)
+    for u, v in G.edges():
+        G[u][v]['weight'] = round(random.uniform(2.0, 10.0), 2)
+    return G
 
 
 # Example Usage
 if __name__ == "__main__":
     # Create a sample graph
-    G = nx.erdos_renyi_graph(n=100, p=0.05)  # Random graph with 100 nodes
+    G = generate_weighted_graph(n=100, p=0.3)
     clusters, reps = perform_kmeans(G, max_k=10)
     print("Cluster Assignments:", clusters)
     print("Cluster Representatives:", reps)

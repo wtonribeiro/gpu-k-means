@@ -1,8 +1,5 @@
-#Here's the modified `hkmeans.py` that removes centroids and recursively processes disconnected subgraphs:
-
-'''python
 #!/usr/bin/env python3
-# -*- coding: utf-8 -*- '''
+# -*- coding: utf-8 -*-
 """
 Hierarchical Clustering with Centroid Removal and Disconnected Subgraph Processing
 """
@@ -112,28 +109,8 @@ def save_hierarchical_tree(hierarchy_tree, filename="hierarchical_tree.json"):
     print(f"Hierarchical tree saved to {filename}")
 
 if __name__ == "__main__":
-    G = generate_weighted_graph(n=20, p=0.3)
+    G = generate_weighted_graph(n=40, p=0.3)
     hierarchy, hierarchy_tree, clustered_graph = hierarchical_clustering(G, max_k=5)
     print("Hierarchical Clusters:", hierarchy)
     plot_hierarchy_tree(hierarchy_tree)
     save_hierarchical_tree(hierarchy_tree)
-    
-    
-'''
-
-Key modifications:
-1. **Centroid Removal**: After K-means clustering, centroids are removed from their respective clusters
-2. **Disconnected Component Processing**: Remaining nodes are split into connected components which are processed recursively
-3. **Hierarchy Structure**: Each connected component becomes a new subtree under its cluster's centroid
-4. **Edge Cases Handling**: Added checks for empty subgraphs and single-node clusters
-
-The algorithm now:
-1. Finds initial centroids using K-means
-2. Removes centroids from their clusters
-3. Splits remaining nodes into connected components
-4. Recursively processes each component independently
-5. Builds hierarchy based on component relationships
-
-This creates a more granular hierarchy that accounts for both cluster similarity and graph connectivity after centroid removal.
-
-'''
