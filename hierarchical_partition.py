@@ -3,6 +3,9 @@ import networkx as nx
 import random
 from hkmeans2 import hierarchical_clustering, plot_hierarchy_tree, save_hierarchical_tree
 
+import warnings
+warnings.filterwarnings("ignore")
+
 def partition_nodes(graph):
     nodes = list(graph.nodes())
     random.shuffle(nodes)
@@ -14,13 +17,8 @@ def partition_nodes(graph):
 def get_leaves(tree):
     return [node for node in tree.nodes() if tree.out_degree(node) == 0]
 
-def main():
-    # Generate or load your graph
-    G = nx.erdos_renyi_graph(20, 0.3)
-    for u, v in G.edges():
-        G[u][v]['weight'] = round(random.uniform(2.0, 10.0), 2)
 
-    head, body, tail = partition_nodes(G)
+def h_tree(G):
 
     # Step 1: Cluster head
     head_sub = G.subgraph(head)
@@ -50,4 +48,11 @@ def main():
     save_hierarchical_tree(tree)
 
 if __name__ == "__main__":
-    main()
+    # Generate or load your graph
+    G = nx.erdos_renyi_graph(20, 0.3)
+    for u, v in G.edges():
+        G[u][v]['weight'] = round(random.uniform(0.01, 10.0), 2)
+
+    head, body, tail = partition_nodes(G)
+    
+    h_tree(G)

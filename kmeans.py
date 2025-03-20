@@ -9,6 +9,9 @@ import cupy as cp
 import cudf
 from cuml.cluster import KMeans
 
+import warnings
+warnings.filterwarnings("ignore")
+
 def graph_to_adjacency_matrix(graph):
     """Convert graph to normalized distance matrix using edge weights"""
     nodes = list(graph.nodes())
@@ -123,7 +126,7 @@ def generate_weighted_graph(n=20, p=0.3):
     """Generate weighted undirected graph"""
     G = nx.erdos_renyi_graph(n, p)
     for u, v in G.edges():
-        G[u][v]['weight'] = round(random.uniform(2.0, 10.0), 2)
+        G[u][v]['weight'] = round(random.uniform(0.01, 10.0), 2)
     return G
 
 

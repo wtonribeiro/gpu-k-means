@@ -11,11 +11,14 @@ import json
 from kmeans import perform_kmeans, graph_to_adjacency_matrix
 import cupy as cp
 
+import warnings
+warnings.filterwarnings("ignore")
+
 def generate_weighted_graph(n=20, p=0.3):
     """Generate weighted undirected graph"""
     G = nx.erdos_renyi_graph(n, p)
     for u, v in G.edges():
-        G[u][v]['weight'] = round(random.uniform(2.0, 10.0), 2)
+        G[u][v]['weight'] = round(random.uniform(0.01, 10.0), 2)
     return G
 
 
@@ -45,7 +48,7 @@ def hierarchical_clustering(graph, max_k=32, parent_node=None, existing_tree=Non
     # Connect to parent (if exists)
     if parent_node is not None:
         parent_original = hierarchy_tree.nodes[parent_node].get('original_id', parent_node)
-        weight = graph[parent_original][root_original]['weight'] if graph.has_edge(parent_original, root_original) else 2.0
+        weight = graph[parent_original][root_original]['weight'] if graph.has_edge(parent_original, root_original) else 0.01
         hierarchy_tree.add_edge(parent_node, root_node, weight=weight)
 
     def recursive_clustering(subgraph, parent_synthetic_id, hierarchy_tree, hierarchy):
@@ -58,7 +61,7 @@ def hierarchical_clustering(graph, max_k=32, parent_node=None, existing_tree=Non
             hierarchy_tree.add_node(synthetic_id, original_id=original_node, label=original_node)  # Add label
             if parent_synthetic_id != synthetic_id:
                 parent_original = hierarchy_tree.nodes[parent_synthetic_id].get('original_id', parent_synthetic_id)
-                weight = subgraph.edges.get((parent_original, original_node), {}).get('weight', 2.0)
+                weight = subgraph.edges.get((parent_original, original_node), {}).get('weight', 0.01)
                 hierarchy_tree.add_edge(parent_synthetic_id, synthetic_id, weight=weight)
             return {synthetic_id: original_node}
 
@@ -69,7 +72,7 @@ def hierarchical_clustering(graph, max_k=32, parent_node=None, existing_tree=Non
             rep_synthetic_id = f"{parent_synthetic_id}_cluster_{label}"
             hierarchy_tree.add_node(rep_synthetic_id, original_id=rep_original, label=rep_original)  # Add label
             parent_original = hierarchy_tree.nodes[parent_synthetic_id].get('original_id', parent_synthetic_id)
-            weight = graph[parent_original][rep_original]['weight'] if graph.has_edge(parent_original, rep_original) else 2.0
+            weight = graph[parent_original][rep_original]['weight'] if graph.has_edge(parent_original, rep_original) else 0.01
             hierarchy_tree.add_edge(parent_synthetic_id, rep_synthetic_id, weight=weight)
             
             remaining = [n for n, lbl in cluster_assignment.items() if lbl == label and n != rep_original]
