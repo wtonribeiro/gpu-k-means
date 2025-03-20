@@ -94,40 +94,44 @@ def hierarchical_clustering(graph, max_k=32, parent_node=None, existing_tree=Non
 
 
 def collapse_duplicate_labels(hierarchy_tree, original_graph):
-    """Collapse consecutive nodes with the same label in the hierarchy tree."""
+    """Collapse nodes with same label connected by edges with weight=0.01 (synthetic edges)."""
     collapsed_tree = hierarchy_tree.copy()
-    while True:
-        nodes_to_collapse = []
-        # Collect nodes to collapse (child nodes with same label as parent)
-        for node in list(collapsed_tree.nodes()):
-            predecessors = list(collapsed_tree.predecessors(node))
-            if len(predecessors) == 1:  # Ensure it's a tree
-                parent = predecessors[0]
-                node_label = collapsed_tree.nodes[node]['label']
-                parent_label = collapsed_tree.nodes[parent]['label']
-                if node_label == parent_label:
-                    nodes_to_collapse.append((parent, node))
-        
-        if not nodes_to_collapse:
-            break
-        
-        # Process each node to collapse
-        for parent, node in nodes_to_collapse:
-            children = list(collapsed_tree.successors(node))
-            for child in children:
-                # Get original IDs for weight calculation
-                parent_original = collapsed_tree.nodes[parent]['original_id']
-                child_original = collapsed_tree.nodes[child]['original_id']
-                # Use original_graph's edge weight or default
-                weight = original_graph[parent_original][child_original]['weight'] \
-                    if original_graph.has_edge(parent_original, child_original) else 0.01
-                # Add edge from parent to child in collapsed tree
-                collapsed_tree.add_edge(parent, child, weight=weight)
-                # Remove old edge
-                collapsed_tree.remove_edge(node, child)
-            # Remove the collapsed node
-            collapsed_tree.remove_node(node)
+    changed = True
     
+    while changed:
+        changed = False
+        nodes_to_process = list(collapsed_tree.nodes())
+        
+        for node in nodes_to_process:
+            if not collapsed_tree.has_node(node):
+                continue
+            
+            predecessors = list(collapsed_tree.predecessors(node))
+            if len(predecessors) != 1:
+                continue  # Only process nodes with one parent
+            
+            parent = predecessors[0]
+            node_label = collapsed_tree.nodes[node]['label']
+            parent_label = collapsed_tree.nodes[parent]['label']
+            
+            # Check edge weight and labels
+            edge_weight = collapsed_tree[parent][node]['weight']
+            if node_label == parent_label and abs(edge_weight - 0.01) < 1e-6:  # Handle floating point precision
+                # Transfer children to parent
+                children = list(collapsed_tree.successors(node))
+                for child in children:
+                    # Preserve edge weight between node and child
+                    child_weight = collapsed_tree[node][child]['weight']
+                    # Add edge from parent to child if not exists
+                    if not collapsed_tree.has_edge(parent, child):
+                        collapsed_tree.add_edge(parent, child, weight=child_weight)
+                    collapsed_tree.remove_edge(node, child)
+                
+                # Remove the redundant node
+                collapsed_tree.remove_node(node)
+                changed = True
+                break  # Restart iteration to avoid issues
+        
     return collapsed_tree
 
 

@@ -18,7 +18,7 @@ def get_leaves(tree):
     return [node for node in tree.nodes() if tree.out_degree(node) == 0]
 
 
-def h_tree(G):
+def h_tree(G, head, body, tail):
     # Step 1: Cluster head (pass original_graph=G)
     head_sub = G.subgraph(head)
     hierarchy, tree, _ = hierarchical_clustering(head_sub, max_k=5, original_graph=G)
@@ -57,16 +57,14 @@ def h_tree(G):
     plot_hierarchy_tree(collapsed_tree)
     save_hierarchical_tree(collapsed_tree)
 
-    plot_hierarchy_tree(tree)
-    save_hierarchical_tree(tree)
 
 if __name__ == "__main__":
     # Generate or load your graph
-    G = nx.erdos_renyi_graph(40, 0.3)
+    G = nx.erdos_renyi_graph(25, 0.3)
     for u, v in G.edges():
         G[u][v]['weight'] = round(random.uniform(0.01, 10.0), 2)
 
     head, body, tail = partition_nodes(G)
     
     
-    h_tree(G)
+    h_tree(G, head, body, tail)
