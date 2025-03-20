@@ -16,7 +16,7 @@ def get_leaves(tree):
 
 def main():
     # Generate or load your graph
-    G = nx.erdos_renyi_graph(100, 0.3)
+    G = nx.erdos_renyi_graph(40, 0.3)
     for u, v in G.edges():
         G[u][v]['weight'] = round(random.uniform(2.0, 10.0), 2)
 

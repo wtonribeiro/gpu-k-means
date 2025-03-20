@@ -11,6 +11,13 @@ import json
 from kmeans import perform_kmeans, graph_to_adjacency_matrix
 import cupy as cp
 
+def generate_weighted_graph(n=20, p=0.3):
+    """Generate weighted undirected graph"""
+    G = nx.erdos_renyi_graph(n, p)
+    for u, v in G.edges():
+        G[u][v]['weight'] = round(random.uniform(2.0, 10.0), 2)
+    return G
+
 def hierarchical_clustering(graph, max_k=32, parent_node=None, existing_tree=None, existing_hierarchy=None):
     """Build hierarchical tree, extending an existing tree if provided."""
     hierarchy_tree = existing_tree if existing_tree is not None else nx.DiGraph()
@@ -72,4 +79,35 @@ def hierarchical_clustering(graph, max_k=32, parent_node=None, existing_tree=Non
     nx.set_node_attributes(graph, hierarchy, name="cluster")
     return hierarchy, hierarchy_tree, graph
 
+def plot_hierarchy_tree(hierarchy_tree):
+    """Plot the hierarchical clustering tree"""
+    plt.figure(figsize=(10, 6))
+    pos = nx.spring_layout(hierarchy_tree, seed=42, k=0.5)
+    labels = nx.get_edge_attributes(hierarchy_tree, "weight")
+
+    nx.draw(hierarchy_tree, pos, with_labels=True, node_color="lightblue", edge_color="gray",
+            node_size=1200, font_size=10, font_weight="bold", alpha=0.8)
+    nx.draw_networkx_edge_labels(hierarchy_tree, pos, edge_labels=labels, font_size=8)
+
+    plt.title("Hierarchical Clustering Tree with Centroid Removal", fontsize=14)
+    plt.show()
+
+def save_hierarchical_tree(hierarchy_tree, filename="hierarchical_tree.json"):
+    """Save hierarchical tree to JSON"""
+    data = {
+        "nodes": list(hierarchy_tree.nodes()),
+        "edges": [(u, v, hierarchy_tree[u][v]["weight"]) for u, v in hierarchy_tree.edges() if u != v]
+    }
+    with open(filename, "w") as f:
+        json.dump(data, f, indent=4)
+    print(f"Hierarchical tree saved to {filename}")
+
 # Remaining functions (plot_hierarchy_tree, save_hierarchical_tree) remain the same
+
+# Example Usage
+if __name__ == "__main__":
+    G = generate_weighted_graph(n=40, p=0.3)
+    hierarchy, hierarchy_tree, clustered_graph = hierarchical_clustering(G, max_k=5)
+    print("Hierarchical Clusters:", hierarchy)
+    plot_hierarchy_tree(hierarchy_tree)
+    save_hierarchical_tree(hierarchy_tree)
