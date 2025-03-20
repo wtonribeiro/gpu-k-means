@@ -22,10 +22,12 @@ def generate_weighted_graph(n=20, p=0.3):
     return G
 
 
-def hierarchical_clustering(graph, max_k=32, parent_node=None, existing_tree=None, existing_hierarchy=None):
+def hierarchical_clustering(graph, max_k=32, parent_node=None, existing_tree=None, 
+                           existing_hierarchy=None, original_graph=None):
     """Build hierarchical tree, extending an existing tree if provided."""
     hierarchy_tree = existing_tree if existing_tree is not None else nx.DiGraph()
     hierarchy = existing_hierarchy.copy() if existing_hierarchy is not None else {}
+    original_graph = original_graph if original_graph is not None else graph  # Fallback
 
     if len(graph.nodes) == 0:
         return hierarchy, hierarchy_tree, graph
@@ -42,13 +44,13 @@ def hierarchical_clustering(graph, max_k=32, parent_node=None, existing_tree=Non
     else:
         root_node = f"{parent_node}_child_{root_original}"
     
-    # Store original label as an attribute
     hierarchy_tree.add_node(root_node, original_id=root_original, label=root_original)
 
-    # Connect to parent (if exists)
+    # Connect to parent (if exists) using original_graph for edge weights
     if parent_node is not None:
         parent_original = hierarchy_tree.nodes[parent_node].get('original_id', parent_node)
-        weight = graph[parent_original][root_original]['weight'] if graph.has_edge(parent_original, root_original) else 0.01
+        # Use original_graph instead of graph for cross-partition edges
+        weight = original_graph[parent_original][root_original]['weight'] if original_graph.has_edge(parent_original, root_original) else 0.01
         hierarchy_tree.add_edge(parent_node, root_node, weight=weight)
 
     def recursive_clustering(subgraph, parent_synthetic_id, hierarchy_tree, hierarchy):
@@ -58,10 +60,11 @@ def hierarchical_clustering(graph, max_k=32, parent_node=None, existing_tree=Non
         if len(subgraph.nodes) == 1:
             original_node = list(subgraph.nodes)[0]
             synthetic_id = f"{parent_synthetic_id}_leaf_{original_node}"
-            hierarchy_tree.add_node(synthetic_id, original_id=original_node, label=original_node)  # Add label
+            hierarchy_tree.add_node(synthetic_id, original_id=original_node, label=original_node)
             if parent_synthetic_id != synthetic_id:
                 parent_original = hierarchy_tree.nodes[parent_synthetic_id].get('original_id', parent_synthetic_id)
-                weight = subgraph.edges.get((parent_original, original_node), {}).get('weight', 0.01)
+                # Use original_graph instead of subgraph for cross-partition edges
+                weight = original_graph[parent_original][original_node]['weight'] if original_graph.has_edge(parent_original, original_node) else 0.01
                 hierarchy_tree.add_edge(parent_synthetic_id, synthetic_id, weight=weight)
             return {synthetic_id: original_node}
 
@@ -70,9 +73,10 @@ def hierarchical_clustering(graph, max_k=32, parent_node=None, existing_tree=Non
         
         for label, rep_original in cluster_to_rep.items():
             rep_synthetic_id = f"{parent_synthetic_id}_cluster_{label}"
-            hierarchy_tree.add_node(rep_synthetic_id, original_id=rep_original, label=rep_original)  # Add label
+            hierarchy_tree.add_node(rep_synthetic_id, original_id=rep_original, label=rep_original)
             parent_original = hierarchy_tree.nodes[parent_synthetic_id].get('original_id', parent_synthetic_id)
-            weight = graph[parent_original][rep_original]['weight'] if graph.has_edge(parent_original, rep_original) else 0.01
+            # Use original_graph instead of graph for cross-partition edges
+            weight = original_graph[parent_original][rep_original]['weight'] if original_graph.has_edge(parent_original, rep_original) else 0.01
             hierarchy_tree.add_edge(parent_synthetic_id, rep_synthetic_id, weight=weight)
             
             remaining = [n for n, lbl in cluster_assignment.items() if lbl == label and n != rep_original]

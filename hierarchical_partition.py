@@ -19,12 +19,11 @@ def get_leaves(tree):
 
 
 def h_tree(G):
-
-    # Step 1: Cluster head
+    # Step 1: Cluster head (pass original_graph=G)
     head_sub = G.subgraph(head)
-    hierarchy, tree, _ = hierarchical_clustering(head_sub, max_k=5)
+    hierarchy, tree, _ = hierarchical_clustering(head_sub, max_k=5, original_graph=G)
 
-    # Step 2: Process body for each head leaf
+    # Step 2: Process body for each head leaf (pass original_graph=G)
     leaves = get_leaves(tree)
     for leaf in leaves:
         original_leaf_id = tree.nodes[leaf].get('original_id', leaf)
@@ -32,9 +31,13 @@ def h_tree(G):
         if not connected:
             continue
         body_sub = G.subgraph(connected)
-        hierarchy, tree, _ = hierarchical_clustering(body_sub, max_k=5, parent_node=leaf, existing_tree=tree, existing_hierarchy=hierarchy)
+        hierarchy, tree, _ = hierarchical_clustering(
+            body_sub, max_k=5, parent_node=leaf, 
+            existing_tree=tree, existing_hierarchy=hierarchy, 
+            original_graph=G  # <-- Pass original graph
+        )
     
-    # Step 3: Process tail for each body leaf
+    # Step 3: Process tail similarly (pass original_graph=G)
     leaves = get_leaves(tree)
     for leaf in leaves:
         original_leaf_id = tree.nodes[leaf].get('original_id', leaf)
@@ -42,7 +45,11 @@ def h_tree(G):
         if not connected:
             continue
         tail_sub = G.subgraph(connected)
-        hierarchy, tree, _ = hierarchical_clustering(tail_sub, max_k=5, parent_node=leaf, existing_tree=tree, existing_hierarchy=hierarchy)
+        hierarchy, tree, _ = hierarchical_clustering(
+            tail_sub, max_k=5, parent_node=leaf, 
+            existing_tree=tree, existing_hierarchy=hierarchy,
+            original_graph=G  # <-- Pass original graph
+        )
 
     plot_hierarchy_tree(tree)
     save_hierarchical_tree(tree)
