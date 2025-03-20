@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 import networkx as nx
 import random
-from hkmeans2 import hierarchical_clustering, plot_hierarchy_tree, save_hierarchical_tree
+from hkmeans2 import hierarchical_clustering, plot_hierarchy_tree, save_hierarchical_tree, collapse_duplicate_labels
 
 import warnings
 warnings.filterwarnings("ignore")
@@ -50,16 +50,23 @@ def h_tree(G):
             existing_tree=tree, existing_hierarchy=hierarchy,
             original_graph=G  # <-- Pass original graph
         )
+    
+    
+    collapsed_tree = collapse_duplicate_labels(tree, G)
+    
+    plot_hierarchy_tree(collapsed_tree)
+    save_hierarchical_tree(collapsed_tree)
 
     plot_hierarchy_tree(tree)
     save_hierarchical_tree(tree)
 
 if __name__ == "__main__":
     # Generate or load your graph
-    G = nx.erdos_renyi_graph(20, 0.3)
+    G = nx.erdos_renyi_graph(40, 0.3)
     for u, v in G.edges():
         G[u][v]['weight'] = round(random.uniform(0.01, 10.0), 2)
 
     head, body, tail = partition_nodes(G)
+    
     
     h_tree(G)
