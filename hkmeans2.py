@@ -94,9 +94,10 @@ def hierarchical_clustering(graph, max_k=32, parent_node=None, existing_tree=Non
 
 
 def collapse_duplicate_labels(hierarchy_tree, original_graph):
-    """Collapse nodes with same label connected by edges with weight=0.01 (synthetic edges)."""
+    """Collapse nodes with same label connected by synthetic edges (weight=0.01)."""
     collapsed_tree = hierarchy_tree.copy()
     changed = True
+    EPSILON = 1e-6  # For floating-point comparison
     
     while changed:
         changed = False
@@ -113,24 +114,22 @@ def collapse_duplicate_labels(hierarchy_tree, original_graph):
             parent = predecessors[0]
             node_label = collapsed_tree.nodes[node]['label']
             parent_label = collapsed_tree.nodes[parent]['label']
-            
-            # Check edge weight and labels
             edge_weight = collapsed_tree[parent][node]['weight']
-            if node_label == parent_label and abs(edge_weight - 0.01) < 1e-6:  # Handle floating point precision
-                # Transfer children to parent
+            
+            # Condition: Same label and synthetic edge (weight ≈ 0.01)
+            if (node_label == parent_label) and (abs(edge_weight - 0.01) < EPSILON):
+                # Reconnect children to grandparent
                 children = list(collapsed_tree.successors(node))
                 for child in children:
-                    # Preserve edge weight between node and child
                     child_weight = collapsed_tree[node][child]['weight']
-                    # Add edge from parent to child if not exists
-                    if not collapsed_tree.has_edge(parent, child):
-                        collapsed_tree.add_edge(parent, child, weight=child_weight)
+                    # Preserve the child's edge weight
+                    collapsed_tree.add_edge(parent, child, weight=child_weight)
                     collapsed_tree.remove_edge(node, child)
                 
                 # Remove the redundant node
                 collapsed_tree.remove_node(node)
                 changed = True
-                break  # Restart iteration to avoid issues
+                break  # Restart iteration
         
     return collapsed_tree
 
