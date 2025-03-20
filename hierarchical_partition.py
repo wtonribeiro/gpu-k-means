@@ -29,16 +29,18 @@ def main():
     # Step 2: Process body for each head leaf
     leaves = get_leaves(tree)
     for leaf in leaves:
-        connected = [nbr for nbr in G.neighbors(leaf) if nbr in body]
+        original_leaf_id = tree.nodes[leaf].get('original_id', leaf)
+        connected = [nbr for nbr in G.neighbors(original_leaf_id) if nbr in body]
         if not connected:
             continue
         body_sub = G.subgraph(connected)
         hierarchy, tree, _ = hierarchical_clustering(body_sub, max_k=5, parent_node=leaf, existing_tree=tree, existing_hierarchy=hierarchy)
-
+    
     # Step 3: Process tail for each body leaf
     leaves = get_leaves(tree)
     for leaf in leaves:
-        connected = [nbr for nbr in G.neighbors(leaf) if nbr in tail]
+        original_leaf_id = tree.nodes[leaf].get('original_id', leaf)
+        connected = [nbr for nbr in G.neighbors(original_leaf_id) if nbr in tail]
         if not connected:
             continue
         tail_sub = G.subgraph(connected)

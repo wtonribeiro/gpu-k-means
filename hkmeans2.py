@@ -18,6 +18,7 @@ def generate_weighted_graph(n=20, p=0.3):
         G[u][v]['weight'] = round(random.uniform(2.0, 10.0), 2)
     return G
 
+
 def hierarchical_clustering(graph, max_k=32, parent_node=None, existing_tree=None, existing_hierarchy=None):
     """Build hierarchical tree, extending an existing tree if provided."""
     hierarchy_tree = existing_tree if existing_tree is not None else nx.DiGraph()
@@ -30,77 +31,92 @@ def hierarchical_clustering(graph, max_k=32, parent_node=None, existing_tree=Non
     nodes_order = list(graph.nodes())
     global_center = adj_matrix.mean(axis=0)
     distances = cp.linalg.norm(adj_matrix - global_center, axis=1)
-    root_node = nodes_order[cp.argmin(distances).item()]
+    root_original = nodes_order[cp.argmin(distances).item()]
+    
+    # Generate synthetic root ID
+    if parent_node is None:
+        root_node = "root_0"
+    else:
+        root_node = f"{parent_node}_child_{root_original}"
+    
+    # Store original label as an attribute
+    hierarchy_tree.add_node(root_node, original_id=root_original, label=root_original)
 
+    # Connect to parent (if exists)
     if parent_node is not None:
-        if parent_node not in hierarchy_tree:
-            hierarchy_tree.add_node(parent_node)
-        weight = graph[parent_node][root_node]['weight'] if graph.has_edge(parent_node, root_node) else 2.0
+        parent_original = hierarchy_tree.nodes[parent_node].get('original_id', parent_node)
+        weight = graph[parent_original][root_original]['weight'] if graph.has_edge(parent_original, root_original) else 2.0
         hierarchy_tree.add_edge(parent_node, root_node, weight=weight)
 
-    def recursive_clustering(subgraph, cluster_id, parent, hierarchy_tree, hierarchy):
+    def recursive_clustering(subgraph, parent_synthetic_id, hierarchy_tree, hierarchy):
         if len(subgraph.nodes) == 0:
             return {}
+        
         if len(subgraph.nodes) == 1:
-            node = list(subgraph.nodes)[0]
-            hierarchy[node] = cluster_id
-            hierarchy_tree.add_node(node)
-            if parent != node:
-                weight = subgraph[parent][node]['weight'] if subgraph.has_edge(parent, node) else 2.0
-                hierarchy_tree.add_edge(parent, node, weight=weight)
-            return {node: cluster_id}
+            original_node = list(subgraph.nodes)[0]
+            synthetic_id = f"{parent_synthetic_id}_leaf_{original_node}"
+            hierarchy_tree.add_node(synthetic_id, original_id=original_node, label=original_node)  # Add label
+            if parent_synthetic_id != synthetic_id:
+                parent_original = hierarchy_tree.nodes[parent_synthetic_id].get('original_id', parent_synthetic_id)
+                weight = subgraph.edges.get((parent_original, original_node), {}).get('weight', 2.0)
+                hierarchy_tree.add_edge(parent_synthetic_id, synthetic_id, weight=weight)
+            return {synthetic_id: original_node}
 
         local_max_k = min(max_k, len(subgraph.nodes))
         cluster_assignment, cluster_to_rep = perform_kmeans(subgraph, local_max_k)
-        cluster_map = {}
-
-        for label, rep in cluster_to_rep.items():
-            sub_nodes = [n for n, lbl in cluster_assignment.items() if lbl == label]
-            hierarchy_tree.add_node(rep)
-            if parent != rep:
-                weight = subgraph[parent][rep]['weight'] if subgraph.has_edge(parent, rep) else 2.0
-                hierarchy_tree.add_edge(parent, rep, weight=weight)
-            remaining = [n for n in sub_nodes if n != rep]
-            if not remaining:
-                cluster_map[rep] = f"{cluster_id}-{label}"
-                continue
-
+        
+        for label, rep_original in cluster_to_rep.items():
+            rep_synthetic_id = f"{parent_synthetic_id}_cluster_{label}"
+            hierarchy_tree.add_node(rep_synthetic_id, original_id=rep_original, label=rep_original)  # Add label
+            parent_original = hierarchy_tree.nodes[parent_synthetic_id].get('original_id', parent_synthetic_id)
+            weight = graph[parent_original][rep_original]['weight'] if graph.has_edge(parent_original, rep_original) else 2.0
+            hierarchy_tree.add_edge(parent_synthetic_id, rep_synthetic_id, weight=weight)
+            
+            remaining = [n for n, lbl in cluster_assignment.items() if lbl == label and n != rep_original]
             remaining_subgraph = subgraph.subgraph(remaining)
             components = list(nx.connected_components(remaining_subgraph))
-            for idx, comp in enumerate(components):
+            
+            for comp in components:
                 comp_subgraph = remaining_subgraph.subgraph(comp)
-                new_cluster_id = f"{cluster_id}-{label}-cc{idx}"
-                comp_map = recursive_clustering(comp_subgraph, new_cluster_id, rep, hierarchy_tree, hierarchy)
-                cluster_map.update(comp_map)
-        return cluster_map
+                recursive_clustering(comp_subgraph, rep_synthetic_id, hierarchy_tree, hierarchy)
 
-    cluster_map = recursive_clustering(graph, "0", root_node, hierarchy_tree, hierarchy)
-    hierarchy.update(cluster_map)
-    nx.set_node_attributes(graph, hierarchy, name="cluster")
+        return hierarchy
+
+    hierarchy = recursive_clustering(graph, root_node, hierarchy_tree, hierarchy)
     return hierarchy, hierarchy_tree, graph
 
 def plot_hierarchy_tree(hierarchy_tree):
-    """Plot the hierarchical clustering tree"""
+    """Plot the tree using original labels instead of synthetic IDs"""
     plt.figure(figsize=(10, 6))
     pos = nx.spring_layout(hierarchy_tree, seed=42, k=0.5)
-    labels = nx.get_edge_attributes(hierarchy_tree, "weight")
+    labels = nx.get_node_attributes(hierarchy_tree, "label")  # Use "label" attribute
+    edge_labels = nx.get_edge_attributes(hierarchy_tree, "weight")
 
-    nx.draw(hierarchy_tree, pos, with_labels=True, node_color="lightblue", edge_color="gray",
+    nx.draw(hierarchy_tree, pos, labels=labels, node_color="lightblue", edge_color="gray",
             node_size=1200, font_size=10, font_weight="bold", alpha=0.8)
-    nx.draw_networkx_edge_labels(hierarchy_tree, pos, edge_labels=labels, font_size=8)
+    nx.draw_networkx_edge_labels(hierarchy_tree, pos, edge_labels=edge_labels, font_size=8)
 
-    plt.title("Hierarchical Clustering Tree with Centroid Removal", fontsize=14)
+    plt.title("Hierarchical Clustering Tree (Original Labels)", fontsize=14)
     plt.show()
 
 def save_hierarchical_tree(hierarchy_tree, filename="hierarchical_tree.json"):
-    """Save hierarchical tree to JSON"""
+    """Save tree with both synthetic IDs and original labels"""
     data = {
-        "nodes": list(hierarchy_tree.nodes()),
-        "edges": [(u, v, hierarchy_tree[u][v]["weight"]) for u, v in hierarchy_tree.edges() if u != v]
+        "nodes": [
+            {"id": node, "label": hierarchy_tree.nodes[node]["label"]} 
+            for node in hierarchy_tree.nodes()
+        ],
+        "edges": [
+            {"from": u, "to": v, "weight": hierarchy_tree[u][v]["weight"]} 
+            for u, v in hierarchy_tree.edges() if u != v
+        ]
     }
     with open(filename, "w") as f:
         json.dump(data, f, indent=4)
     print(f"Hierarchical tree saved to {filename}")
+
+
+
 
 # Remaining functions (plot_hierarchy_tree, save_hierarchical_tree) remain the same
 
