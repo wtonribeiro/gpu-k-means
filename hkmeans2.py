@@ -24,6 +24,7 @@ def generate_weighted_graph(n=20, p=0.3):
 
 def hierarchical_clustering(graph, max_k=32, parent_node=None, existing_tree=None, 
                            existing_hierarchy=None, original_graph=None):
+    
     """Build hierarchical tree, extending an existing tree if provided."""
     hierarchy_tree = existing_tree if existing_tree is not None else nx.DiGraph()
     hierarchy = existing_hierarchy.copy() if existing_hierarchy is not None else {}
@@ -43,6 +44,8 @@ def hierarchical_clustering(graph, max_k=32, parent_node=None, existing_tree=Non
         root_node = "root_0"
     else:
         root_node = f"{parent_node}_child_{root_original}"
+        
+        print(root_node)
     
     hierarchy_tree.add_node(root_node, original_id=root_original, label=root_original)
 
@@ -58,8 +61,13 @@ def hierarchical_clustering(graph, max_k=32, parent_node=None, existing_tree=Non
             return {}
         
         if len(subgraph.nodes) == 1:
+            
+            
             original_node = list(subgraph.nodes)[0]
             synthetic_id = f"{parent_synthetic_id}_leaf_{original_node}"
+            
+            print(synthetic_id)
+            
             hierarchy_tree.add_node(synthetic_id, original_id=original_node, label=original_node)
             if parent_synthetic_id != synthetic_id:
                 parent_original = hierarchy_tree.nodes[parent_synthetic_id].get('original_id', parent_synthetic_id)
@@ -72,7 +80,11 @@ def hierarchical_clustering(graph, max_k=32, parent_node=None, existing_tree=Non
         cluster_assignment, cluster_to_rep = perform_kmeans(subgraph, local_max_k)
         
         for label, rep_original in cluster_to_rep.items():
+            
             rep_synthetic_id = f"{parent_synthetic_id}_cluster_{label}"
+            
+            print(rep_synthetic_id)
+            
             hierarchy_tree.add_node(rep_synthetic_id, original_id=rep_original, label=rep_original)
             parent_original = hierarchy_tree.nodes[parent_synthetic_id].get('original_id', parent_synthetic_id)
             # Use original_graph instead of graph for cross-partition edges
